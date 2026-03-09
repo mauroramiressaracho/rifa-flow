@@ -955,6 +955,10 @@
                 <i class="fas fa-bolt" style="color: var(--primary);"></i>
                 Tela de sorteio
             </a>
+            <button type="button" class="status-badge" id="btnExportarExcel" data-tooltip="Exportar todos os lançamentos para Excel">
+                <i class="fas fa-file-excel" style="color: #1f8f4f;"></i>
+                Exportar Excel
+            </button>
             <div class="status-badge" id="refreshStats" data-tooltip="Atualizar dados">
                 <i class="fas fa-chart-line" style="color: var(--primary);"></i>
                 <span id="totalBilhetes">0</span> vendidos
@@ -1159,6 +1163,7 @@
 
 <!-- jQuery 3.7.1 -->
 <script src="https://code.jquery.com/jquery-3.7.1.min.js" integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo=" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 
 <script>
     // Dados
@@ -1238,6 +1243,82 @@
         return `R$ ${formatarValor(valor)}`;
     }
 
+    function formatarDataExportacao(valor) {
+        if (!valor) return '';
+        const data = new Date(valor);
+        if (Number.isNaN(data.getTime())) return String(valor);
+        return data.toLocaleString('pt-BR');
+    }
+
+    function nomeArquivoExportacao() {
+        const agora = new Date();
+        const pad = (n) => String(n).padStart(2, '0');
+        const stamp = `${agora.getFullYear()}${pad(agora.getMonth() + 1)}${pad(agora.getDate())}-${pad(agora.getHours())}${pad(agora.getMinutes())}${pad(agora.getSeconds())}`;
+        return `rifaflow-lancamentos-${stamp}`;
+    }
+
+    function montarLinhasExportacao() {
+        return rifas.map((rifa) => ({
+            ID: rifa.id || '',
+            Numero: Number(rifa.numero) || 0,
+            Nome: rifa.nome || '',
+            Status: rifa.pago ? 'Pago' : 'Pendente',
+            Valor: Number(rifa.valor) || 0,
+            Criado_em: formatarDataExportacao(rifa.created_at),
+            Atualizado_em: formatarDataExportacao(rifa.updated_at)
+        }));
+    }
+
+    function exportarCsvFallback(linhas) {
+        const colunas = ['ID', 'Numero', 'Nome', 'Status', 'Valor', 'Criado_em', 'Atualizado_em'];
+        const escapar = (valor) => `"${String(valor ?? '').replace(/"/g, '""')}"`;
+        const corpo = [
+            colunas.join(';'),
+            ...linhas.map((linha) => colunas.map((c) => escapar(linha[c])).join(';'))
+        ].join('\r\n');
+
+        const blob = new Blob([`\uFEFF${corpo}`], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `${nomeArquivoExportacao()}.csv`;
+        link.style.display = 'none';
+        document.body.appendChild(link);
+        link.click();
+        setTimeout(() => {
+            URL.revokeObjectURL(link.href);
+            link.remove();
+        }, 120);
+    }
+
+    function exportarExcelLancamentos() {
+        const linhas = montarLinhasExportacao();
+        if (linhas.length === 0) {
+            alert('Nenhum lançamento encontrado para exportar.');
+            return;
+        }
+
+        if (typeof XLSX === 'undefined') {
+            exportarCsvFallback(linhas);
+            alert('Biblioteca de Excel indisponível. Exportei em CSV.');
+            return;
+        }
+
+        const ws = XLSX.utils.json_to_sheet(linhas);
+        ws['!cols'] = [
+            { wch: 38 },
+            { wch: 10 },
+            { wch: 28 },
+            { wch: 14 },
+            { wch: 12 },
+            { wch: 22 },
+            { wch: 22 }
+        ];
+
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Lançamentos');
+        XLSX.writeFile(wb, `${nomeArquivoExportacao()}.xlsx`, { compression: true });
+    }
+
     function normalizarTextoBusca(texto) {
         return String(texto || '')
             .normalize('NFD')
@@ -1255,6 +1336,8 @@
                 numero: Number.parseInt(item.numero, 10) || 0,
                 nome: String(item.nome || '').trim(),
                 pago: parsePago(item.pago),
+                created_at: String(item.created_at || '').trim(),
+                updated_at: String(item.updated_at || '').trim(),
                 valor: (() => {
                     const lido = parseValor(item.valor);
                     return lido === null ? PRECO_BILHETE : lido;
@@ -1717,6 +1800,22 @@
         const index = Number.parseInt($(this).data('index'), 10);
         if (Number.isInteger(index)) {
             abrirModalDetalhes(index);
+        }
+    });
+
+    $('#btnExportarExcel').on('click', async function() {
+        const $icon = $(this).find('i');
+        $icon.addClass('fa-spin');
+        try {
+            await executarComProgresso(async () => {
+                await recarregarRifas();
+            }, 380);
+            exportarExcelLancamentos();
+        } catch (error) {
+            console.error('Erro ao exportar lançamentos:', error);
+            alert(`Falha ao exportar: ${error.message}`);
+        } finally {
+            setTimeout(() => $icon.removeClass('fa-spin'), 600);
         }
     });
 
